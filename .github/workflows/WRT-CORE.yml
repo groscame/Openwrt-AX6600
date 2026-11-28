@@ -140,6 +140,56 @@ jobs:
             echo "src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages" >> feeds.conf.default
           fi
 
+      - name: Disable Factory Image
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("wrt/target/linux/qualcommax/image/ipq60xx.mk")
+          text = path.read_text()
+
+          # 定位雅典娜 RE-CS-02 的设备定义
+          pattern = re.compile(
+              r"(?ms)^define Device/jdcloud_re-cs-02[ \t]*\n.*?^endef[ \t]*$"
+          )
+          match = pattern.search(text)
+
+          if not match:
+              raise SystemExit("错误：找不到 jdcloud_re-cs-02 设备定义")
+
+          block = match.group()
+
+          if "$(call Device/EmmcImage)" not in block:
+              raise SystemExit("错误：找不到 Device/EmmcImage")
+
+          # EmmcImage 默认添加 factory.bin。
+          # 覆盖 IMAGES，只保留 sysupgrade.bin。
+          if "\tIMAGES := sysupgrade.bin" not in block:
+              block = block.replace(
+                  "$(call Device/EmmcImage)",
+                  "$(call Device/EmmcImage)\n\tIMAGES := sysupgrade.bin",
+                  1
+              )
+
+          # 删除设备专门定义的 factory 镜像生成规则。
+          block, removed = re.subn(
+              r"(?m)^[ \t]*IMAGE/factory\.bin[ \t]*:=.*(?:\n|$)",
+              "",
+              block,
+              count=1
+          )
+
+          if removed != 1:
+              raise SystemExit("错误：没有成功删除 factory 镜像规则")
+
+          # 写回源码
+          text = text[:match.start()] + block + text[match.end():]
+          path.write_text(text)
+
+          print("已禁用 JDCloud RE-CS-02 factory 镜像，仅保留 sysupgrade.bin")
+          PY
+
       - name: Check Scripts
         run: |
           find ./ -maxdepth 3 -type f -iregex ".*\(txt\|sh\)$" -exec dos2unix {} \; -exec chmod +x {} \;
